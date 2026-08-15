@@ -1,0 +1,29 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17     # postgres 17 + pgvector 확장 (v1.0 의미 검색용)
+    environment:
+      POSTGRES_USER: secretary
+      POSTGRES_PASSWORD: secretary
+      POSTGRES_DB: secretarydb
+    volumes:
+      - pgdata:/var/lib/postgresql/data          # down/up을 넘어 생존, 초기화는 down -v
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secretary -d secretarydb"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  app:
+    build: ./app
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://secretary:secretary@db:5432/secretarydb
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
