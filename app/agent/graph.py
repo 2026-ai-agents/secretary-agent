@@ -1,13 +1,12 @@
-"""비서 그래프 — v0.1: 단기 기억만. 새 대화(thread)를 열면 백지다.
+"""비서 그래프 — v0.2: 장기 기억(store)이 연결된다.
 
-booking-agent에서 완성한 것(advisor ↔ tools 순환, pg checkpointer,
-신원 주입)을 그대로 딛는다. checkpointer 덕에 기억은 재시작을 넘는다 —
-그러나 **thread를 넘지는 못한다**. 같은 사용자가 "새 대화"를 열면
-알레르기도 취향도 백지에서 다시 시작한다.
+thread별 열쇠(checkpointer)에 더해 **사용자별 서랍(store)**이 생긴다.
+advisor는 매 턴 서랍을 열어 기억을 시스템 프롬프트에 싣고, 사용자가
+기억을 부탁하면 remember 도구가 서랍에 넣는다. 서랍은 thread와 무관하게
+사용자에게 붙어 있으므로, "새 대화"를 열어도 기억이 이어진다.
 
-한 가지 대조를 심어 둔다: 일정은 db 행이라 새 thread에서도 도구로
-조회된다. 백지가 되는 것은 도메인 데이터가 아니라 **대화에서 흘린
-사실들**이다. 그 사실들을 thread 너머로 옮기는 것이 v0.2부터의 주제다.
+단, v0.2의 저장은 **명시적**이다 — "기억해 줘"라고 말해야 저장된다.
+흘리듯 말한 사실을 스스로 담는 것은 v0.3(기억 판단)의 몫이다.
 """
 
 import operator
@@ -16,10 +15,13 @@ from typing import Annotated, Literal, TypedDict
 
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.store.base import BaseStore
+from langgraph.store.postgres import PostgresStore
 from litellm import completion
 from psycopg_pool import ConnectionPool
 
 from agent.config import pick_model
+from agent.memory import list_memories, render_memories
 from agent.tools import DATABASE_URL, run_tool, tool_schemas
 
 SYSTEM_PROMPT = """당신은 개인 비서 '단비'다. {user_name} 님의 일정을 챙기고 하루를 돕는다.
@@ -27,9 +29,12 @@ SYSTEM_PROMPT = """당신은 개인 비서 '단비'다. {user_name} 님의 일�
 ## 진행 방법
 - 일정을 잡아 달라면 add_event로 잡고, 일정 질문에는 my_events로 확인해 답한다.
   일정을 지어내지 않는다.
-- 사용자가 취향·사정을 이야기하면 자연스럽게 대화에 반영한다.
+- 사용자가 **명시적으로 "기억해 줘"라고 부탁할 때만** remember로 장기 기억에
+  저장한다. 부탁받지 않은 이야기는 저장하지 않는다.
+- 아래 "기억하고 있는 것"은 지난 대화들에서 저장된 장기 기억이다. 답할 때
+  자연스럽게 활용하되, 지어내지 않는다.
 - 오늘은 {today}다. "내일", "다음 주 화요일" 같은 상대 날짜는 이 기준으로 계산한다.
-
+{memories}
 답은 간결하게 한국어로. {user_name} 님을 자연스럽게 부른다."""
 
 
@@ -41,10 +46,13 @@ class SecretaryState(TypedDict):
     user_name: str
 
 
-def advisor(state: SecretaryState) -> dict:
+def advisor(state: SecretaryState, config, *, store: BaseStore) -> dict:
+    """store는 compile(store=…)로 주입된다 — 서랍을 열어 프롬프트에 싣는 지점."""
+    memories = list_memories(store, state["user_id"])
     system = SYSTEM_PROMPT.format(
         today=date.today().isoformat(),
         user_name=state.get("user_name", "사용자"),
+        memories=render_memories(memories),
     )
     response = completion(
         model=pick_model(),
@@ -86,9 +94,12 @@ builder.add_edge(START, "advisor")
 builder.add_conditional_edges("advisor", route_after_advisor, {"tools": "tools", END: END})
 builder.add_edge("tools", "advisor")
 
-# 단기 기억: thread별 상태가 pg에 산다. 재시작은 넘지만 thread는 못 넘는다.
+# 두 기억이 같은 pg를 나눠 쓴다: thread별 열쇠(checkpointer)와
+# 사용자별 서랍(store). setup()은 각자 자기 테이블을 만든다 (멱등).
 pool = ConnectionPool(DATABASE_URL, kwargs={"autocommit": True})
 checkpointer = PostgresSaver(pool)
 checkpointer.setup()
+store = PostgresStore(pool)
+store.setup()
 
-graph = builder.compile(checkpointer=checkpointer)
+graph = builder.compile(checkpointer=checkpointer, store=store)
