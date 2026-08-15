@@ -29,7 +29,7 @@ docker compose up --build
 | 릴리즈 | 상태 |
 | --- | --- |
 | v0.1 | 단기 기억만 — 새 대화(thread)를 열면 비서가 백지 |
-| v0.2 | (예정) PostgresStore 연결: 명시적 기억 저장·주입 |
+| v0.2 | PostgresStore 연결: remember 도구로 저장, 매 턴 프롬프트에 주입 |
 | v0.3 | (예정) 기억 판단: 뭘 기억할지 스스로 결정하는 memorize 노드 |
 | v1.0 | (예정) 의미 기반 검색 + 기억 갱신·삭제 완성 |
 
@@ -52,7 +52,9 @@ secretary-agent/
 ## 시연 스크립트
 
 ```bash
-docker compose exec app python demos/blank_slate.py   # v0.1: 새 대화 = 백지 (일정은 남는데)
+docker compose exec app python demos/blank_slate.py    # v0.1: 새 대화 = 백지 (일정은 남는데)
+docker compose exec app python demos/two_memories.py   # v0.2: 두 사실, 두 서랍 — 누가 살아남나
+docker compose exec app python demos/dump_store.py     # v0.2: 장기 기억의 실체도 pg의 행
 ```
 
 ## 세 가지 기억의 수명

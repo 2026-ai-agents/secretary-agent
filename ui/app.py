@@ -79,6 +79,16 @@ with st.sidebar:
         st.query_params.clear()
         st.rerun()
     st.divider()
+    st.markdown("**단비가 기억하는 것**")
+    try:
+        remembered = requests.get(f"{APP_URL}/memories/{user['user_id']}", timeout=10).json()
+        if not remembered["memories"]:
+            st.caption("아직 기억하는 것이 없습니다.")
+        for m in remembered["memories"]:
+            st.caption(f"💭 {m['fact']}")
+    except requests.RequestException:
+        st.caption("기억을 불러오지 못했습니다.")
+    st.divider()
     st.markdown("**다가오는 일정**")
     try:
         upcoming = requests.get(f"{APP_URL}/events/{user['user_id']}", timeout=10).json()

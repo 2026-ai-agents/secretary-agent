@@ -13,10 +13,11 @@ import psycopg
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from agent.graph import graph
+from agent.graph import graph, store
+from agent.memory import list_memories
 from agent.tools import DATABASE_URL
 
-app = FastAPI(title="secretary-agent", version="0.1")
+app = FastAPI(title="secretary-agent", version="0.2")
 
 
 @app.get("/health")
@@ -97,6 +98,12 @@ def events(user_id: int):
          "time": str(r[3])[:5] if r[3] else None}
         for r in rows
     ]}
+
+
+@app.get("/memories/{user_id}")
+def memories(user_id: int):
+    """사이드바용 — 단비가 이 사용자에 대해 기억하는 것 (장기 기억)."""
+    return {"memories": list_memories(store, user_id)}
 
 
 class ChatBody(BaseModel):

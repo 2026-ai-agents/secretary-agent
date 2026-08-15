@@ -64,9 +64,25 @@ def my_events(args: MyEventsArgs, user_id: int) -> dict:
     ]}
 
 
+class RememberArgs(BaseModel):
+    """오래 기억할 가치가 있는 사실을 장기 기억에 저장한다. 새 대화에서도 유지된다."""
+
+    fact: str = Field(min_length=1, description="기억할 사실 한 문장 (예: 견과류 알레르기가 있다)")
+
+
+def remember(args: RememberArgs, user_id: int) -> dict:
+    from agent.graph import store          # 실행 시점 임포트 — 순환을 피한다
+    from agent.memory import save_memory
+
+    key = save_memory(store, user_id, args.fact)
+    return {"remembered": args.fact, "key": key,
+            "notice": "장기 기억에 저장했다. 새 대화에서도 기억한다고 안내하라."}
+
+
 REGISTRY: dict[str, tuple[type[BaseModel], object]] = {
     "add_event": (AddEventArgs, add_event),
     "my_events": (MyEventsArgs, my_events),
+    "remember": (RememberArgs, remember),
 }
 
 
