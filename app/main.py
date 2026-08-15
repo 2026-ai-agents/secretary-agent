@@ -14,10 +14,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from agent.graph import graph, store
-from agent.memory import list_memories
+from agent.memory import delete_memory, list_memories
 from agent.tools import DATABASE_URL
 
-app = FastAPI(title="secretary-agent", version="0.3")
+app = FastAPI(title="secretary-agent", version="1.0")
 
 
 @app.get("/health")
@@ -104,6 +104,13 @@ def events(user_id: int):
 def memories(user_id: int):
     """사이드바용 — 단비가 이 사용자에 대해 기억하는 것 (장기 기억)."""
     return {"memories": list_memories(store, user_id)}
+
+
+@app.delete("/memories/{user_id}/{key}")
+def forget(user_id: int, key: str):
+    """내 기억은 내가 지운다 — 사이드바의 🗑 버튼이 부른다."""
+    delete_memory(store, user_id, key)
+    return {"deleted": key}
 
 
 class ChatBody(BaseModel):

@@ -1,11 +1,13 @@
-"""비서 그래프 — v0.3: 무엇을 기억할지 스스로 판단한다.
+"""비서 그래프 — v1.0: 관련 기억만 꺼내 쓰고, 낡은 기억은 갈아 끼운다.
 
-v0.2의 기억은 "기억해 줘"라는 부탁이 있어야 저장됐다. 진짜 비서는
-부탁받지 않아도 담을 것을 담는다. 매 턴이 끝날 때(답이 나온 뒤)
-**memorize 노드**가 이번 턴의 대화를 읽고 "오래 기억할 가치가 있는
-사실"을 골라 서랍에 넣는다 — 잡담은 버리고, 이미 아는 것은 다시 넣지
-않는다. 판단 기준이 코드가 아니라 프롬프트에 산다는 것이 이 노드의
-특징이자, 수업에서 들여다볼 지점이다.
+두 가지가 완성된다.
+
+  · **의미 기반 조회** — 기억이 쌓이면 전부를 매 턴 실을 수 없다. store에
+    시맨틱 인덱스(임베딩)가 붙고, advisor는 지금 발화와 의미가 가까운
+    기억만 골라 싣는다.
+  · **기억의 갱신** — 사실은 변한다("이사 갈 거예요" → "이사했어요").
+    memorize 노드가 add뿐 아니라 remove도 판단해, 낡은 기억을 지우고
+    새 사실로 갈아 끼운다. 서랍은 쌓이기만 하는 창고가 아니다.
 """
 
 import json
@@ -21,8 +23,9 @@ from langgraph.store.postgres import PostgresStore
 from litellm import completion
 from psycopg_pool import ConnectionPool
 
-from agent.config import pick_model
-from agent.memory import list_memories, render_memories, save_memory
+from agent.config import EMBED_DIMS, pick_model
+from agent.memory import (delete_memory, embed, list_memories, render_memories,
+                          save_memory, search_memories)
 from agent.tools import DATABASE_URL, run_tool, tool_schemas
 
 SYSTEM_PROMPT = """당신은 개인 비서 '단비'다. {user_name} 님의 일정을 챙기고 하루를 돕는다.
@@ -48,8 +51,10 @@ class SecretaryState(TypedDict):
 
 
 def advisor(state: SecretaryState, config, *, store: BaseStore) -> dict:
-    """store는 compile(store=…)로 주입된다 — 서랍을 열어 프롬프트에 싣는 지점."""
-    memories = list_memories(store, state["user_id"])
+    """서랍을 여는 지점 — v1.0부터는 전부가 아니라 **관련 기억만** 싣는다."""
+    last_user = next((m["content"] for m in reversed(state["messages"])
+                      if m.get("role") == "user" and m.get("content")), "")
+    memories = search_memories(store, state["user_id"], query=last_user, limit=5)
     system = SYSTEM_PROMPT.format(
         today=date.today().isoformat(),
         user_name=state.get("user_name", "사용자"),
@@ -89,15 +94,17 @@ MEMORIZE_PROMPT = """당신은 개인 비서의 기억 판단기다. 아래는 �
   가족·거처, 반복되는 습관, 앞으로의 대화에 계속 쓰일 사정.
 - 잡담, 일회성 요청, 그때뿐인 감상은 버린다.
 - "이미 기억하는 것"과 같은 내용은 다시 넣지 않는다.
+- **사실이 변했으면 갈아 끼운다**: 낡은 기억의 key를 remove에 넣고, 새 사실을
+  add에 넣는다 (예: "성수동으로 이사한다" → 이사가 끝났다면 remove + "성수동에 산다" add).
 - 사실은 3인칭 한 문장으로 짧게 쓴다.
 
-## 이미 기억하는 것
+## 이미 기억하는 것 (key: 사실)
 {known}
 
 ## 이번 턴 대화
 {turn}
 
-JSON 하나로만 답하라: {{"facts": ["...", ...]}} — 없으면 {{"facts": []}}"""
+JSON 하나로만 답하라: {{"add": ["...", ...], "remove": ["key", ...]}} — 없으면 빈 배열"""
 
 
 def memorize(state: SecretaryState, config, *, store: BaseStore) -> dict:
@@ -113,20 +120,24 @@ def memorize(state: SecretaryState, config, *, store: BaseStore) -> dict:
             turn.append(f"[{message['role']}] {content}")
         if message.get("role") == "user":
             break
-    known = [m["fact"] for m in list_memories(store, state["user_id"])]
+    known = list_memories(store, state["user_id"])
     response = completion(
         model=pick_model(),
         messages=[{"role": "user", "content": MEMORIZE_PROMPT.format(
-            known="\n".join(f"- {fact}" for fact in known) or "- (없음)",
+            known="\n".join(f"- {m['key']}: {m['fact']}" for m in known) or "- (없음)",
             turn="\n".join(reversed(turn)),
         )}],
         response_format={"type": "json_object"},
     )
     try:
-        facts = json.loads(response.choices[0].message.content or "{}").get("facts", [])
+        verdict = json.loads(response.choices[0].message.content or "{}")
     except json.JSONDecodeError:
-        facts = []
-    for fact in facts:
+        verdict = {}
+    known_keys = {m["key"] for m in known}
+    for key in verdict.get("remove", []):
+        if key in known_keys:                    # 판단기가 지어낸 key는 무시
+            delete_memory(store, state["user_id"], key)
+    for fact in verdict.get("add", []):
         if isinstance(fact, str) and fact.strip():
             save_memory(store, state["user_id"], fact.strip())
     return {}
@@ -151,10 +162,12 @@ builder.add_edge("memorize", END)
 
 # 두 기억이 같은 pg를 나눠 쓴다: thread별 열쇠(checkpointer)와
 # 사용자별 서랍(store). setup()은 각자 자기 테이블을 만든다 (멱등).
+# v1.0: store에 시맨틱 인덱스가 붙는다 — put 때 임베딩이 함께 저장되고,
+# search(query=…)가 pgvector 위에서 의미 검색이 된다.
 pool = ConnectionPool(DATABASE_URL, kwargs={"autocommit": True})
 checkpointer = PostgresSaver(pool)
 checkpointer.setup()
-store = PostgresStore(pool)
+store = PostgresStore(pool, index={"dims": EMBED_DIMS, "embed": embed})
 store.setup()
 
 graph = builder.compile(checkpointer=checkpointer, store=store)

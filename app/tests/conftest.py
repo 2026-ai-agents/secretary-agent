@@ -1,6 +1,33 @@
-"""LLM을 부르지 않는 테스트 대역 — booking-agent와 같은 규약."""
+"""LLM을 부르지 않는 테스트 대역 — booking-agent와 같은 규약.
 
+임베딩도 대역이다: 텍스트 해시로 만든 결정적 벡터라 키 없이 돌고,
+put/search의 **기계 동작**(인덱싱·limit·격리)을 검증한다. 의미 순위의
+품질은 실제 임베딩의 몫이라 데모에서 실측한다.
+"""
+
+import hashlib
+import struct
 from types import SimpleNamespace
+
+import pytest
+
+from agent import memory
+from agent.config import EMBED_DIMS
+
+
+def fake_embed(texts: list[str]) -> list[list[float]]:
+    vectors = []
+    for text in texts:
+        raw = hashlib.sha256(text.encode()).digest()
+        floats = [struct.unpack(">H", raw[i % 32:i % 32 + 2])[0] / 65535
+                  for i in range(0, EMBED_DIMS * 2, 2)]
+        vectors.append(floats)
+    return vectors
+
+
+@pytest.fixture(autouse=True)
+def keyless_embedder(monkeypatch):
+    monkeypatch.setattr(memory, "EMBEDDER", fake_embed)
 
 
 def fake_tool_call(name: str, arguments: str, call_id: str = "call_1"):

@@ -36,7 +36,7 @@ def state(message: str) -> dict:
 def test_memorize_saves_judged_facts(monkeypatch):
     wire(monkeypatch, [
         fake_response(content="이사 준비 도와드릴게요!"),                  # advisor
-        fake_response(content='{"facts": ["다음 달 성수동으로 이사한다"]}'),  # memorize
+        fake_response(content='{"add": ["다음 달 성수동으로 이사한다"], "remove": []}'),  # memorize
     ])
     graph_module.graph.invoke(state("다음 달에 성수동으로 이사 가요"), cfg())
     assert [m["fact"] for m in list_memories(graph_module.store, TEST_USER)] \
@@ -46,7 +46,7 @@ def test_memorize_saves_judged_facts(monkeypatch):
 def test_memorize_discards_small_talk(monkeypatch):
     wire(monkeypatch, [
         fake_response(content="정말 덥죠!"),
-        fake_response(content='{"facts": []}'),
+        fake_response(content='{"add": [], "remove": []}'),
     ])
     graph_module.graph.invoke(state("오늘 날씨 진짜 덥네요"), cfg())
     assert list_memories(graph_module.store, TEST_USER) == []
@@ -56,7 +56,7 @@ def test_memorize_sees_known_facts_for_dedup(monkeypatch):
     save_memory(graph_module.store, TEST_USER, "견과류 알레르기가 있다")
     llm = wire(monkeypatch, [
         fake_response(content="네, 알고 있어요!"),
-        fake_response(content='{"facts": []}'),
+        fake_response(content='{"add": [], "remove": []}'),
     ])
     graph_module.graph.invoke(state("저 견과류 알레르기 있는 거 아시죠?"), cfg())
     # 기억 판단 프롬프트에 '이미 기억하는 것'이 실려 갔다

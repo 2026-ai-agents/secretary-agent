@@ -80,9 +80,9 @@ def test_same_thread_remembers(monkeypatch):
     # v0.3부터 턴마다 memorize 판단 호출이 하나씩 더 낀다
     llm = wire(monkeypatch, [
         fake_response(content="견과류 알레르기 기억할게요!"),
-        fake_response(content='{"facts": []}'),
+        fake_response(content='{"add": [], "remove": []}'),
         fake_response(content="견과류 알레르기가 있으시죠."),
-        fake_response(content='{"facts": []}'),
+        fake_response(content='{"add": [], "remove": []}'),
     ])
     config = cfg()
     graph_module.graph.invoke(state("저 견과류 알레르기 있어요"), config)
@@ -94,9 +94,9 @@ def test_same_thread_remembers(monkeypatch):
 def test_new_thread_is_blank(monkeypatch):
     llm = wire(monkeypatch, [
         fake_response(content="기억할게요!"),
-        fake_response(content='{"facts": []}'),
+        fake_response(content='{"add": [], "remove": []}'),
         fake_response(content="아직 말씀해 주신 적이 없어요."),
-        fake_response(content='{"facts": []}'),
+        fake_response(content='{"add": [], "remove": []}'),
     ])
     graph_module.graph.invoke(state("저 견과류 알레르기 있어요"), cfg())
     graph_module.graph.invoke(state("제가 무슨 알레르기라고 했죠?"), cfg())   # 다른 thread
@@ -109,7 +109,7 @@ def test_tool_roundtrip_hits_real_db(monkeypatch):
         fake_response(tool_calls=[fake_tool_call(
             "add_event", '{"title": "치과", "event_date": "2099-12-28", "event_time": "15:00"}')]),
         fake_response(content="다음 주 치과 일정 잡아 뒀어요."),
-        fake_response(content='{"facts": []}'),
+        fake_response(content='{"add": [], "remove": []}'),
     ])
     result = graph_module.graph.invoke(state("치과 예약 잡아줘"), cfg())
     tool_msg = [m for m in result["messages"] if m.get("role") == "tool"][0]
