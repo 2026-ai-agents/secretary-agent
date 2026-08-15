@@ -56,7 +56,7 @@ def test_memories_ride_the_system_prompt(monkeypatch):
     save_memory(graph_module.store, TEST_USER, "커피 대신 디카페인을 마신다")
     llm = wire(monkeypatch, [
         fake_response(content="디카페인으로 준비할게요!"),
-        fake_response(content='{"facts": []}'),
+        fake_response(content='{"add": [], "remove": []}'),
     ])
     graph_module.graph.invoke(state("회의 준비해 줘"), cfg())
     system = llm.calls[0]["messages"][0]["content"]
@@ -69,9 +69,9 @@ def test_store_memory_crosses_threads(monkeypatch):
         fake_response(tool_calls=[fake_tool_call(
             "remember", '{"fact": "견과류 알레르기가 있다"}')]),
         fake_response(content="기억해 둘게요!"),
-        fake_response(content='{"facts": []}'),
+        fake_response(content='{"add": [], "remove": []}'),
         fake_response(content="견과류 알레르기가 있으시죠."),
-        fake_response(content='{"facts": []}'),
+        fake_response(content='{"add": [], "remove": []}'),
     ])
     graph_module.graph.invoke(state("견과류 알레르기 기억해 줘"), cfg())
     graph_module.graph.invoke(state("제가 무슨 알레르기가 있다고 했죠?"), cfg())  # 새 thread

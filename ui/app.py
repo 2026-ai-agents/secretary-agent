@@ -85,7 +85,11 @@ with st.sidebar:
         if not remembered["memories"]:
             st.caption("아직 기억하는 것이 없습니다.")
         for m in remembered["memories"]:
-            st.caption(f"💭 {m['fact']}")
+            fact_col, del_col = st.columns([6, 1])
+            fact_col.caption(f"💭 {m['fact']}")
+            if del_col.button("🗑", key=f"forget-{m['key']}", help="이 기억 지우기"):
+                requests.delete(f"{APP_URL}/memories/{user['user_id']}/{m['key']}", timeout=10)
+                st.rerun()
     except requests.RequestException:
         st.caption("기억을 불러오지 못했습니다.")
     st.divider()
