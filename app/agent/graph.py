@@ -1,13 +1,14 @@
-"""비서 그래프 — v0.2: 장기 기억(store)이 연결된다.
+"""비서 그래프 — v0.3: 무엇을 기억할지 스스로 판단한다.
 
-thread별 열쇠(checkpointer)에 더해 **사용자별 서랍(store)**이 생긴다.
-advisor는 매 턴 서랍을 열어 기억을 시스템 프롬프트에 싣고, 사용자가
-기억을 부탁하면 remember 도구가 서랍에 넣는다. 서랍은 thread와 무관하게
-사용자에게 붙어 있으므로, "새 대화"를 열어도 기억이 이어진다.
-
-단, v0.2의 저장은 **명시적**이다 — "기억해 줘"라고 말해야 저장된다.
-흘리듯 말한 사실을 스스로 담는 것은 v0.3(기억 판단)의 몫이다.
+v0.2의 기억은 "기억해 줘"라는 부탁이 있어야 저장됐다. 진짜 비서는
+부탁받지 않아도 담을 것을 담는다. 매 턴이 끝날 때(답이 나온 뒤)
+**memorize 노드**가 이번 턴의 대화를 읽고 "오래 기억할 가치가 있는
+사실"을 골라 서랍에 넣는다 — 잡담은 버리고, 이미 아는 것은 다시 넣지
+않는다. 판단 기준이 코드가 아니라 프롬프트에 산다는 것이 이 노드의
+특징이자, 수업에서 들여다볼 지점이다.
 """
+
+import json
 
 import operator
 from datetime import date
@@ -21,7 +22,7 @@ from litellm import completion
 from psycopg_pool import ConnectionPool
 
 from agent.config import pick_model
-from agent.memory import list_memories, render_memories
+from agent.memory import list_memories, render_memories, save_memory
 from agent.tools import DATABASE_URL, run_tool, tool_schemas
 
 SYSTEM_PROMPT = """당신은 개인 비서 '단비'다. {user_name} 님의 일정을 챙기고 하루를 돕는다.
@@ -29,8 +30,8 @@ SYSTEM_PROMPT = """당신은 개인 비서 '단비'다. {user_name} 님의 일�
 ## 진행 방법
 - 일정을 잡아 달라면 add_event로 잡고, 일정 질문에는 my_events로 확인해 답한다.
   일정을 지어내지 않는다.
-- 사용자가 **명시적으로 "기억해 줘"라고 부탁할 때만** remember로 장기 기억에
-  저장한다. 부탁받지 않은 이야기는 저장하지 않는다.
+- 사용자가 "기억해 줘"라고 부탁하면 remember로 즉시 저장한다. 부탁이 없어도
+  괜찮다 — 대화가 끝날 때 별도의 기억 판단 단계가 담을 것을 담는다.
 - 아래 "기억하고 있는 것"은 지난 대화들에서 저장된 장기 기억이다. 답할 때
   자연스럽게 활용하되, 지어내지 않는다.
 - 오늘은 {today}다. "내일", "다음 주 화요일" 같은 상대 날짜는 이 기준으로 계산한다.
@@ -81,18 +82,72 @@ def tools(state: SecretaryState) -> dict:
     }
 
 
-def route_after_advisor(state: SecretaryState) -> Literal["tools", "__end__"]:
+MEMORIZE_PROMPT = """당신은 개인 비서의 기억 판단기다. 아래는 사용자와 비서의 이번 턴 대화다.
+
+## 판단 기준
+- 사용자에 대해 **오래 기억할 가치가 있는 사실**만 고른다: 취향, 건강·알레르기,
+  가족·거처, 반복되는 습관, 앞으로의 대화에 계속 쓰일 사정.
+- 잡담, 일회성 요청, 그때뿐인 감상은 버린다.
+- "이미 기억하는 것"과 같은 내용은 다시 넣지 않는다.
+- 사실은 3인칭 한 문장으로 짧게 쓴다.
+
+## 이미 기억하는 것
+{known}
+
+## 이번 턴 대화
+{turn}
+
+JSON 하나로만 답하라: {{"facts": ["...", ...]}} — 없으면 {{"facts": []}}"""
+
+
+def memorize(state: SecretaryState, config, *, store: BaseStore) -> dict:
+    """턴이 끝난 뒤의 기억 판단 — 판단 기준은 코드가 아니라 프롬프트에 산다.
+
+    실패에 관대하다: JSON이 안 나오면 이번 턴은 그냥 기억하지 않는다.
+    기억은 놓쳐도 다음 턴이 있지만, 답변이 죽으면 제품이 죽는다.
+    """
+    turn = []
+    for message in reversed(state["messages"]):
+        content = message.get("content")
+        if content and message.get("role") in ("user", "assistant"):
+            turn.append(f"[{message['role']}] {content}")
+        if message.get("role") == "user":
+            break
+    known = [m["fact"] for m in list_memories(store, state["user_id"])]
+    response = completion(
+        model=pick_model(),
+        messages=[{"role": "user", "content": MEMORIZE_PROMPT.format(
+            known="\n".join(f"- {fact}" for fact in known) or "- (없음)",
+            turn="\n".join(reversed(turn)),
+        )}],
+        response_format={"type": "json_object"},
+    )
+    try:
+        facts = json.loads(response.choices[0].message.content or "{}").get("facts", [])
+    except json.JSONDecodeError:
+        facts = []
+    for fact in facts:
+        if isinstance(fact, str) and fact.strip():
+            save_memory(store, state["user_id"], fact.strip())
+    return {}
+
+
+def route_after_advisor(state: SecretaryState) -> Literal["tools", "memorize"]:
+    """답이 나왔으면 끝이 아니라 기억 판단으로 — END 앞에 한 정거장이 생겼다."""
     last = state["messages"][-1]
-    return "tools" if last.get("tool_calls") else END
+    return "tools" if last.get("tool_calls") else "memorize"
 
 
 # ── 선언부 ────────────────────────────────────────────────────────────
 builder = StateGraph(SecretaryState)
 builder.add_node("advisor", advisor)
 builder.add_node("tools", tools)
+builder.add_node("memorize", memorize)
 builder.add_edge(START, "advisor")
-builder.add_conditional_edges("advisor", route_after_advisor, {"tools": "tools", END: END})
+builder.add_conditional_edges("advisor", route_after_advisor,
+                              {"tools": "tools", "memorize": "memorize"})
 builder.add_edge("tools", "advisor")
+builder.add_edge("memorize", END)
 
 # 두 기억이 같은 pg를 나눠 쓴다: thread별 열쇠(checkpointer)와
 # 사용자별 서랍(store). setup()은 각자 자기 테이블을 만든다 (멱등).

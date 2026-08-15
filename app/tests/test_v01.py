@@ -77,26 +77,31 @@ def test_my_events_lists_only_own_rows():
 # ── 단기 기억의 경계 ─────────────────────────────────────────────────
 
 def test_same_thread_remembers(monkeypatch):
+    # v0.3부터 턴마다 memorize 판단 호출이 하나씩 더 낀다
     llm = wire(monkeypatch, [
         fake_response(content="견과류 알레르기 기억할게요!"),
+        fake_response(content='{"facts": []}'),
         fake_response(content="견과류 알레르기가 있으시죠."),
+        fake_response(content='{"facts": []}'),
     ])
     config = cfg()
     graph_module.graph.invoke(state("저 견과류 알레르기 있어요"), config)
     graph_module.graph.invoke(state("제가 무슨 알레르기라고 했죠?"), config)
-    sent = llm.calls[1]["messages"]
+    sent = llm.calls[2]["messages"]          # [advisor, memorize, advisor, …]
     assert [m.get("role") for m in sent] == ["system", "user", "assistant", "user"]
 
 
 def test_new_thread_is_blank(monkeypatch):
     llm = wire(monkeypatch, [
         fake_response(content="기억할게요!"),
+        fake_response(content='{"facts": []}'),
         fake_response(content="아직 말씀해 주신 적이 없어요."),
+        fake_response(content='{"facts": []}'),
     ])
     graph_module.graph.invoke(state("저 견과류 알레르기 있어요"), cfg())
     graph_module.graph.invoke(state("제가 무슨 알레르기라고 했죠?"), cfg())   # 다른 thread
-    # v0.1의 결핍: 새 thread의 첫 호출에는 이전 대화가 실려 가지 않는다
-    assert [m.get("role") for m in llm.calls[1]["messages"]] == ["system", "user"]
+    # 새 thread의 첫 호출에는 이전 대화가 실려 가지 않는다 (단기 기억의 경계)
+    assert [m.get("role") for m in llm.calls[2]["messages"]] == ["system", "user"]
 
 
 def test_tool_roundtrip_hits_real_db(monkeypatch):
@@ -104,6 +109,7 @@ def test_tool_roundtrip_hits_real_db(monkeypatch):
         fake_response(tool_calls=[fake_tool_call(
             "add_event", '{"title": "치과", "event_date": "2099-12-28", "event_time": "15:00"}')]),
         fake_response(content="다음 주 치과 일정 잡아 뒀어요."),
+        fake_response(content='{"facts": []}'),
     ])
     result = graph_module.graph.invoke(state("치과 예약 잡아줘"), cfg())
     tool_msg = [m for m in result["messages"] if m.get("role") == "tool"][0]
