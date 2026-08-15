@@ -17,7 +17,7 @@ from agent.graph import graph, store
 from agent.memory import list_memories
 from agent.tools import DATABASE_URL
 
-app = FastAPI(title="secretary-agent", version="0.2")
+app = FastAPI(title="secretary-agent", version="0.3")
 
 
 @app.get("/health")
